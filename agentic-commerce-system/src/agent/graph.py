@@ -31,36 +31,54 @@ tools = [product_search, size_recommender, eta, order_lookup, order_cancel]
 # The ToolNode is a pre-built node from LangGraph that executes tools
 tool_node = ToolNode(tools)
 
-
 def agent_node(state: AgentState) -> dict:
     """
     The core reasoning node of the agent. It decides whether to call a tool
-    or to generate a final response.
+    or to generate a final response based on a manual, prompt-based tool-calling approach.
     """
     print("---NODE: Agent---")
-
+    
     system_prompt_path = Path(__file__).parent.parent.parent / "prompts" / "system.md"
     system_prompt = system_prompt_path.read_text()
 
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", system_prompt),
-            MessagesPlaceholder(variable_name="messages"),
-        ]
-    )
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_prompt),
+        MessagesPlaceholder(variable_name="messages"),
+    ])
 
     llm = get_llm()
-
-    # ***MODIFICATION: Bind the tools to the LLM for robust tool calling***
-    llm_with_tools = llm.bind_tools(tools)
-
-    chain = prompt | llm_with_tools
-
-    # The response will now be an AIMessage with a 'tool_calls' attribute
+    
+    chain = prompt | llm
+    
     response = chain.invoke({"messages": state["messages"]})
+    
+    # Manually parse for tool calls
+    tool_calls = []
+    match = re.search(r"```json\n(\{.*?\})\n```", response.content, re.DOTALL)
+    if match:
+        json_str = match.group(1)
+        try:
+            tool_call_data = json.loads(json_str)
+            if isinstance(tool_call_data, list):
+                for i, tool in enumerate(tool_call_data):
+                    tool_calls.append({
+                        "name": tool["tool_name"],
+                        "args": tool["arguments"],
+                        "id": f"tool_call_{i}"
+                    })
+            else:
+                tool_calls.append({
+                    "name": tool_call_data["tool_name"],
+                    "args": tool_call_data["arguments"],
+                    "id": "tool_call_0"
+                })
+            ai_message = AIMessage(content="", tool_calls=tool_calls)
+        except (json.JSONDecodeError, KeyError):
+            ai_message = AIMessage(content=response.content)
+    else:
+        ai_message = AIMessage(content=response.content)
 
-    return {"messages": [response]}
-
+    return {"messages": [ai_message]}
 
 def tool_executor_node(state: AgentState) -> dict:
     """
@@ -96,7 +114,7 @@ def tool_executor_node(state: AgentState) -> dict:
         "evidence": evidence,
         "tools_called": tools_called
     }
-
+    
 # 2. Define the Conditional Edges
 
 def should_continue(state: AgentState) -> str:
