@@ -1,9 +1,8 @@
 import json
-import re
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import ToolMessage
 from pathlib import Path
 
 from .state import AgentState
@@ -25,96 +24,81 @@ from .tools.tools import (
 
 # 1. Define the Agent and Tool Executor Nodes
 
-# The list of tools our agent can use
 tools = [product_search, size_recommender, eta, order_lookup, order_cancel]
-
-# The ToolNode is a pre-built node from LangGraph that executes tools
 tool_node = ToolNode(tools)
 
 def agent_node(state: AgentState) -> dict:
     """
-    The core reasoning node of the agent. It decides whether to call a tool
-    or to generate a final response based on a manual, prompt-based tool-calling approach.
+    The core reasoning node of the agent.
     """
     print("---NODE: Agent---")
-    
+
     system_prompt_path = Path(__file__).parent.parent.parent / "prompts" / "system.md"
-    system_prompt = system_prompt_path.read_text()
+    base_system_prompt = system_prompt_path.read_text()
+    
+    # Add dynamic context based on intent
+    intent = state.get("intent")
+    dynamic_context = ""
+    
+    if intent == "product_assist":
+        dynamic_context = "\n\n**CRITICAL FOR PRODUCT ASSIST:**\n" + \
+                         "- ALWAYS call product_search first\n" + \
+                         "- Product search returns UP TO 2 items - use ALL returned items\n" + \
+                         "- If user asks about size, call size_recommender\n" + \
+                         "- If user asks about shipping/ETA, call eta tool\n" + \
+                         "- In final response, ALWAYS compare the products if 2 are available\n" + \
+                         "- Include specific details: titles, prices, colors, available sizes\n" + \
+                         "- Mention why each product suits the user's needs\n"
+    elif intent == "order_help":
+        dynamic_context = "\n\n**CRITICAL FOR ORDER HELP:**\n" + \
+                         "- ALWAYS call order_lookup first with order_id and email\n" + \
+                         "- If order found, IMMEDIATELY call order_cancel to check policy\n" + \
+                         "- Never make cancellation decisions yourself - let the tool decide\n" + \
+                         "- The policy_guard will handle the final decision\n"
+    
+    enhanced_system_prompt = base_system_prompt + dynamic_context
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
+        ("system", enhanced_system_prompt),
         MessagesPlaceholder(variable_name="messages"),
     ])
 
     llm = get_llm()
-    
-    chain = prompt | llm
-    
-    response = chain.invoke({"messages": state["messages"]})
-    
-    # Manually parse for tool calls
-    tool_calls = []
-    match = re.search(r"```json\n(\{.*?\})\n```", response.content, re.DOTALL)
-    if match:
-        json_str = match.group(1)
-        try:
-            tool_call_data = json.loads(json_str)
-            if isinstance(tool_call_data, list):
-                for i, tool in enumerate(tool_call_data):
-                    tool_calls.append({
-                        "name": tool["tool_name"],
-                        "args": tool["arguments"],
-                        "id": f"tool_call_{i}"
-                    })
-            else:
-                tool_calls.append({
-                    "name": tool_call_data["tool_name"],
-                    "args": tool_call_data["arguments"],
-                    "id": "tool_call_0"
-                })
-            ai_message = AIMessage(content="", tool_calls=tool_calls)
-        except (json.JSONDecodeError, KeyError):
-            ai_message = AIMessage(content=response.content)
-    else:
-        ai_message = AIMessage(content=response.content)
+    llm_with_tools = llm.bind_tools(tools)
 
-    return {"messages": [ai_message]}
+    chain = prompt | llm_with_tools
+
+    response = chain.invoke({"messages": state["messages"]})
+
+    return {"messages": [response]}
+
 
 def tool_executor_node(state: AgentState) -> dict:
     """
     This node is responsible for executing the tools called by the agent.
-    It also formats the output and adds it to the 'evidence' field in the state.
     """
     print("---NODE: Tool Executor---")
-    
-    tool_calls = state["messages"][-1].tool_calls
-    
-    # The ToolNode, when invoked directly, returns the raw tool outputs
-    raw_tool_outputs = tool_node.invoke(state)
-    
-    # We need to create ToolMessage objects to add back to the history
-    tool_messages = []
-    for i, tool_output in enumerate(raw_tool_outputs):
-        tool_messages.append(
-            ToolMessage(
-                content=json.dumps(tool_output), # Content must be a string
-                tool_call_id=tool_calls[i]['id'],
-            )
-        )
 
-    # The evidence is also the stringified version of the tool output
+    tool_calls = state["messages"][-1].tool_calls
+
+    # The ToolNode returns a dictionary with a single 'messages' key
+    # containing a list of ToolMessage objects.
+    tool_result = tool_node.invoke(state)
+    tool_messages = tool_result["messages"]
+
+    # The evidence is the stringified version of the tool output
     evidence = [msg.content for msg in tool_messages]
-    
-    tools_called = [call['name'] for call in tool_calls]
-    
+    tools_called = [call["name"] for call in tool_calls]
+
     print(f"---TOOLS EXECUTED: {', '.join(tools_called)}---")
-    
+
     return {
         "messages": tool_messages,
         "evidence": evidence,
-        "tools_called": tools_called
+        "tools_called": tools_called,
     }
-    
+
+
 # 2. Define the Conditional Edges
 
 def should_continue(state: AgentState) -> str:
@@ -127,25 +111,32 @@ def should_continue(state: AgentState) -> str:
     else:
         return END
 
+
 def route_after_tools(state: AgentState) -> str:
     """
     Decision point after executing tools.
+    If the 'order_cancel' tool was just called, route to the policy guard.
+    Otherwise, loop back to the agent to continue reasoning.
     """
     print("---EDGE: Route After Tools---")
-    if state.get("intent") == "order_help":
+
+    # The most recently called tools are in the state
+    tools_called = state.get("tools_called", [])
+
+    if "order_cancel" in tools_called:
         return "policy_guard"
     else:
         return "agent"
 
+
 # 3. Assemble the Graph
 
-def create_graph():
+def build_graph_structure():
     """
-    Builds and compiles the LangGraph agent.
+    Builds and returns the LangGraph builder (uncompiled) for visualization and compilation.
     """
-    
     graph = StateGraph(AgentState)
-    
+
     graph.add_node("router", router_node)
     graph.add_node("agent", agent_node)
     graph.add_node("tool_executor", tool_executor_node)
@@ -181,9 +172,17 @@ def create_graph():
             "agent": "agent"
         }
     )
-    
+
     graph.add_edge("policy_guard", "responder")
-    
+
     graph.add_edge("responder", END)
-    
+
+    return graph
+
+
+def create_graph():
+    """
+    Builds and compiles the LangGraph agent.
+    """
+    graph = build_graph_structure()
     return graph.compile()

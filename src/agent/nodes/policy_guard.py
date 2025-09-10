@@ -23,14 +23,16 @@ def policy_guard_node(state: AgentState) -> dict:
     cancel_tool_output = None
     for item in evidence:
         try:
-            # Evidence items are stringified JSON, so we parse them
             data = json.loads(item)
-            if "success" in data and "reason" in data:
+            # --- START OF FIX ---
+            # The tool output will always have a "success" key.
+            # This is a more reliable check.
+            if "success" in data:
+                # --- END OF FIX ---
                 cancel_tool_output = data
                 break
         except (json.JSONDecodeError, TypeError):
             continue
-
     if not cancel_tool_output:
         print("---POLICY GUARD: No cancellation tool output found in evidence.---")
         return {"policy_decision": None}
@@ -46,5 +48,5 @@ def policy_guard_node(state: AgentState) -> dict:
         # If success is not explicitly False, we assume it's allowed or not applicable
         decision = {"cancel_allowed": True}
         print("---POLICY GUARD: Cancellation ALLOWED.---")
-        
+
     return {"policy_decision": decision}

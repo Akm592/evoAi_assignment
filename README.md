@@ -4,17 +4,32 @@ This project implements an AI-powered e-commerce assistant for the fictional bra
 
 ## Features
 
+### Core Functionality
 - **Intent Classification**: Automatically determines the user's intent (e.g., product help, order questions).
 - **Tool-Based Reasoning**: Uses a set of deterministic Python tools to answer questions based on actual data, preventing factual hallucination.
 - **Product Assistance**: 
     - Searches for products by name, price, and tags.
-    - Recommends sizes.
+    - **Always returns 2 product recommendations with explicit comparison**.
+    - Enhanced size recommendations with comprehensive logic.
     - Provides shipping ETAs based on zip code.
 - **Order Management**:
-    - Looks up orders by ID and email.
+    - Looks up orders by ID and email with input validation.
     - Processes order cancellations based on a strict 60-minute policy.
+    - **Enhanced error handling and validation**.
 - **Policy Enforcement**: A dedicated 'Policy Guard' node ensures business rules (like the cancellation window) are correctly enforced.
 - **Safety Guardrails**: Politely deflects out-of-scope questions, such as requests for discount codes.
+
+### Advanced Features
+- **Deterministic Routing**: Keyword-based routing fallback for improved consistency.
+- **Input Validation**: Comprehensive validation for order IDs, emails, and zip codes.
+- **Enhanced System Prompts**: Dynamic context injection based on user intent.
+- **Improved Determinism**: Temperature controls and seeding for reproducible outputs.
+- **Comprehensive Error Handling**: Graceful handling of edge cases and invalid inputs.
+
+### Bonus Features
+- **Unit Tests**: Edge case testing for 60-minute policy enforcement.
+- **Evaluation Framework**: JSON schema validation and response quality metrics.
+- **Enhanced Tools**: Better size recommendations and product comparison logic.
 
 ## Project Structure
 
@@ -73,19 +88,36 @@ pip install -r requirements.txt
 
 **3. Configure Environment Variables**
 
-You will need an API key from [OpenRouter](https://openrouter.ai/keys) to run the agent.
+This project supports two LLM providers: OpenRouter and Groq. You can choose which one to use by setting the `LLM_PROVIDER` variable in your `.env` file.
 
 1.  Copy the example `.env.example` file to a new file named `.env`.
-2.  Open the `.env` file and paste your OpenRouter API key.
-3.  **Important**: For this agent to function correctly, it requires a model with strong tool-calling capabilities. It is highly recommended to set the model name to `openai/gpt-3.5-turbo`.
+2.  Open the `.env` file and set the `LLM_PROVIDER` to either `"openrouter"` or `"groq"`.
+3.  Fill in the credentials for the provider you have chosen.
 
-Your `.env` file should look like this:
+**For OpenRouter:**
+-   Set `LLM_PROVIDER="openrouter"`.
+-   Provide your `OPENROUTER_API_KEY` from [openrouter.ai](https://openrouter.ai/keys).
+-   Set the `OPENROUTER_MODEL_NAME`. It is highly recommended to use a model with strong, OpenAI-compatible tool-calling, such as `"openai/gpt-3.5-turbo"`.
+
+**For Groq:**
+-   Set `LLM_PROVIDER="groq"`.
+-   Provide your `GROQ_API_KEY` from [console.groq.com](https://console.groq.com/keys).
+-   Set the `GROQ_MODEL_NAME`, for example `"llama3-8b-8192"`.
+
+Your `.env` file should look like this (you only need to fill out the section for the provider you are using):
 
 ```
-# OpenRouter Credentials
+# --- LLM Provider Selection ---
+LLM_PROVIDER="openrouter" # or "groq"
+
+# --- OpenRouter Credentials ---
 OPENROUTER_API_KEY="your-openrouter-api-key"
 OPENROUTER_MODEL_NAME="openai/gpt-3.5-turbo"
 OPENROUTER_BASE_URL="https://openrouter.ai/api/v1"
+
+# --- Groq Credentials ---
+GROQ_API_KEY="your-groq-api-key"
+GROQ_MODEL_NAME="llama3-8b-8192"
 ```
 
 ## How to Run
@@ -106,6 +138,22 @@ To run the four validation test cases required by the assignment, execute the `r
 
 ```bash
 python -m tests.run_tests
+```
+
+### 3. Unit Tests (Bonus)
+
+Run the unit tests for policy enforcement:
+
+```bash
+python -m tests.test_policy
+```
+
+### 4. Evaluation Framework (Bonus)
+
+Run the evaluation framework to validate agent performance:
+
+```bash
+python -m tests.eval_framework
 ```
 
 ## How It Works

@@ -57,6 +57,22 @@ Based on this context, provide a clear and helpful answer.
         "policy_decision": policy_decision,
     })
 
+    # Create the internal trace that should be emitted per assignment requirements
+    trace = {
+        "intent": state.get("intent"),
+        "tools_called": state.get("tools_called", []),
+        "evidence": state.get("evidence", []),
+        "policy_decision": state.get("policy_decision"),
+        "final_message": response.content
+    }
+    
+    # Print the internal JSON trace as required by the assignment
+    import json
+    print("\n" + "="*60)
+    print("INTERNAL TRACE JSON:")
+    print(json.dumps(trace, indent=2, ensure_ascii=False))
+    print("="*60 + "\n")
+    
     print(f"---RESPONDER: Generated final message.---")
 
     return {"final_message": response.content}
